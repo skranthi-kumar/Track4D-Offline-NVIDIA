@@ -37,12 +37,12 @@ from trackfrag.tracker import TrackerConfig, baseline_config, ours_config, track
 HOTA_THRS = (0.2, 0.3, 0.4, 0.5, 0.6)
 
 
-def load_scenes(nusc, split, n_scenes, det_path):
-    """Detections grouped into scenes of time-ordered keyframes, in the global frame."""
+def load_scenes(nusc, split, n_scenes, det_path, offset=0):
+    """Detections grouped into scenes of time-ordered keyframes, in the global frame.
+    Uses scenes [offset, offset + n_scenes) of the sorted split (n_scenes=0: to the end)."""
     from nuscenes.utils.splits import create_splits_scenes
     names = sorted(create_splits_scenes()[split])
-    if n_scenes:
-        names = names[:n_scenes]
+    names = names[offset:offset + n_scenes] if n_scenes else names[offset:]
     by_name = {s["name"]: s for s in nusc.scene}
     dets = json.load(open(det_path))["results"]
     scenes = []
@@ -133,8 +133,15 @@ class Evaluator:
         return res
 
 
-def run_tracker(cfg, scenes):
+def has_velocities(scenes):
+    """False when the detector reports no velocities (all zero), e.g. single-frame MonoDIS."""
+    return any(np.abs(f.vel).sum() > 0 for s in scenes for f in s if len(f))
+
+
+def run_tracker(cfg, scenes, use_vel=True):
     cfg = replace(cfg, out_thr=0.0)
+    if not use_vel:
+        cfg = replace(cfg, noise=replace(cfg.noise, use_vel=False))
     t = time.perf_counter()
     out = [track_scene(s, cfg) for s in scenes]
     return out, 1000 * (time.perf_counter() - t) / len(scenes)
@@ -153,7 +160,9 @@ def main():
     ap.add_argument("--version", default="v1.0-trainval")
     ap.add_argument("--dets", required=True, help="nuScenes detection results json (frozen detector)")
     ap.add_argument("--split", default="val")
-    ap.add_argument("--scenes", type=int, default=0, help="use the first N scenes of the split (0 = all)")
+    ap.add_argument("--scenes", type=int, default=0, help="use N scenes of the split from --offset (0 = to the end)")
+    ap.add_argument("--offset", type=int, default=0,
+                    help="skip the first N scenes of the sorted split; e.g. tune on val --scenes 25, report on val --offset 25")
     ap.add_argument("--config", action="append", default=[], help="selected config json(s) for eval")
     ap.add_argument("--official", action="store_true", help="also run TrackingEval.main() (needs the full split)")
     ap.add_argument("--out", default="results/nusc")
@@ -161,9 +170,12 @@ def main():
     from nuscenes import NuScenes
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     nusc = NuScenes(version=a.version, dataroot=a.dataroot, verbose=False)
-    names, scenes = load_scenes(nusc, a.split, a.scenes, a.dets)
+    names, scenes = load_scenes(nusc, a.split, a.scenes, a.dets, a.offset)
     ev = Evaluator(nusc, a.split, names)
-    print(f"{len(scenes)} scenes, {sum(len(f) for s in scenes for f in s)} detections")
+    use_vel = has_velocities(scenes)
+    print(f"{len(scenes)} scenes ({names[0]}..{names[-1]}), {sum(len(f) for s in scenes for f in s)} detections")
+    if not use_vel:
+        print("detections carry no velocities: both trackers run position-only (KF estimates motion)")
 
     if a.mode == "tune":
         grids = {"baseline": [baseline_config(det_thr=d, max_age_s=m, relink_gap_s=g)
@@ -173,14 +185,15 @@ def main():
         for name, grid in grids.items():
             best = None
             for cfg in grid:
-                outputs, ms = run_tracker(cfg, scenes)
+                outputs, ms = run_tracker(cfg, scenes, use_vel)
                 r = ev(to_submission(names, outputs))
                 log.setdefault(name, []).append({**{k: getattr(cfg, k) for k in ("det_thr", "max_age_s", "relink_gap_s")},
-                                                 "amota": r["amota"], "frag": r["frag"], "ids": r["ids"]})
+                                                 **{k: r[k] for k in ("amota", "frag", "ids", "recall", "mt", "ml")}})
                 print(name, log[name][-1])
                 if best is None or r["amota"] > best[1]["amota"]:
                     best = (cfg, r)
             cfg, r = best
+            cfg = replace(cfg, noise=replace(cfg.noise, use_vel=use_vel))
             thr = max(HOTA_THRS, key=lambda t: r["by_thr"][t]["HOTA"])
             (out / f"selected_{name}.json").write_text(json.dumps(asdict(cfg) | {"hota_thr": thr}, indent=1))
         (out / "tuning_log.json").write_text(json.dumps(log, indent=1))
@@ -189,7 +202,9 @@ def main():
     rows = {}
     for path in a.config:
         cfg, thr = load_config(path)
-        outputs, ms = run_tracker(cfg, scenes)
+        if cfg.noise.use_vel != use_vel:
+            print(f"{cfg.name}: config use_vel={cfg.noise.use_vel} but these detections give use_vel={use_vel}; following the detections")
+        outputs, ms = run_tracker(cfg, scenes, use_vel)
         sub = to_submission(names, outputs)
         sub_path = out / f"tracking_{cfg.name}_{a.split}.json"
         sub_path.write_text(json.dumps(sub))
@@ -203,7 +218,9 @@ def main():
             r["official"] = {k: off[k] for k in ("amota", "amotp", "ids", "frag", "mota", "recall")}
         b = r["by_thr"][thr]
         rows[cfg.name] = r
+        r["use_vel"], r["scenes"] = use_vel, names
         print(f"{cfg.name}: AMOTA {r['amota']:.3f} FRAG {int(r['frag'])} IDS {int(r['ids'])} | "
+              f"recall {r['recall']:.3f} MT {int(r['mt'])} ML {int(r['ml'])} | "
               f"HOTA {b['HOTA']:.1f} IDF1 {b['IDF1']:.1f} IDs/GT {b['IDs/GT']:.3f} | {ms:.0f} ms/scene")
     if "baseline" in rows and "ours" in rows:
         rb, ro = rows["baseline"], rows["ours"]

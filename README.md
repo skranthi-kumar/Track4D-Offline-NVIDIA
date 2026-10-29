@@ -55,6 +55,28 @@ Detection files use the standard nuScenes detection submission format
 Seven tracking classes are used. Ego poses come from the dataset, as in standard nuScenes
 camera-tracking practice.
 
+### Official camera-only detections (Mapillary / MonoDIS)
+
+nuScenes publishes frozen camera-only detections for train/val/test
+(`https://www.nuscenes.org/data/detection-mapillary.zip`, 676 MB). Only the nuScenes metadata
+(`v1.0-trainval_meta`) is needed alongside; no images.
+
+* **No velocities.** MonoDIS is single-frame and all its velocities are 0. `run_nuscenes.py`
+  detects this and runs *both* trackers position-only (the Kalman filter estimates motion), so
+  the baseline no longer exactly mirrors Foundation4D, which uses detector velocities.
+* **Tune on held-out val scenes, not train.** MonoDIS was trained on nuScenes train, so its train
+  detections are better than its val detections (and `mapillary_train.json` is 1.8 GB). Tune on
+  the first 25 val scenes, then report on the other 125:
+
+```bash
+python run_nuscenes.py tune --dataroot /data/nuscenes --dets mapillary_val.json --split val --scenes 25
+python run_nuscenes.py eval --dataroot /data/nuscenes --dets mapillary_val.json --split val --offset 25 \
+    --config results/nusc/selected_baseline.json --config results/nusc/selected_ours.json
+```
+
+`--official` needs the full split, so it is not used with `--offset`; the devkit path is shown
+to match it exactly (REPORT.md §5).
+
 ## Method in one paragraph
 
 Pass 1 is online Kalman tracking with a short lifetime. It uses **depth-aware Mahalanobis

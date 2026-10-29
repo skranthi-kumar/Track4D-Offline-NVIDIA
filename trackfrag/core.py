@@ -45,6 +45,8 @@ class NoiseModel:
     Camera depth error grows with range and lies along the viewing ray, so the position
     covariance is anisotropic: ``sd_depth`` along the ego->object ray, ``sd_lat`` across it.
     With ``depth_aware=False`` an isotropic ``iso_sd`` is used (the usual planar-distance assumption).
+    With ``use_vel=False`` detector velocities are ignored (single-frame detectors such as MonoDIS
+    report none) and the filter estimates motion from positions alone.
     """
     depth_sd0: float = 0.25
     depth_sd_k: float = 0.03
@@ -53,6 +55,7 @@ class NoiseModel:
     vel_sd: float = 1.0
     iso_sd: float = 1.0
     depth_aware: bool = True
+    use_vel: bool = True
 
     def pos_cov(self, xy, ego):
         """(N, 2, 2) position covariances for detections at ``xy`` (N, 2)."""
@@ -71,8 +74,23 @@ class NoiseModel:
         """(N, 4, 4) covariances of [x, y, vx, vy] measurements."""
         R = np.zeros((len(xy), 4, 4))
         R[:, :2, :2] = self.pos_cov(xy, ego)
-        R[:, 2, 2] = R[:, 3, 3] = self.vel_sd ** 2
+        R[:, 2, 2] = R[:, 3, 3] = self.vel_sd ** 2 if self.use_vel else NO_VEL_VAR
         return R
+
+
+# Velocity variance of a measurement that carries no velocity, and the prior std (m/s) a new
+# track starts with. The prior is wider than any real velocity noise, so with detector velocities
+# it never binds and the filter is unchanged.
+NO_VEL_VAR = 1e8
+VEL_PRIOR_SD = 10.0
+
+
+def init_cov(R):
+    """Initial state covariance of a track started from a measurement with covariance R."""
+    P = R.copy()
+    P[2, 2] = min(P[2, 2], VEL_PRIOR_SD ** 2)
+    P[3, 3] = min(P[3, 3], VEL_PRIOR_SD ** 2)
+    return P
 
 
 def cv_model(dt, accel_sd):
@@ -128,7 +146,7 @@ def rts_smooth(meas, times, accel_sd):
     xf = np.zeros((n, 4)); Pf = np.zeros((n, 4, 4))
     xp = np.zeros((n, 4)); Pp = np.zeros((n, 4, 4))
     Fs = [None] * n
-    x, P = meas[0].z.copy(), meas[0].R.copy()
+    x, P = meas[0].z.copy(), init_cov(meas[0].R)
     for i, k in enumerate(ks):
         if i > 0:
             F, Q = cv_model(times[k] - times[ks[i - 1]], accel_sd)

@@ -3,7 +3,7 @@
 Evaluation report. All numbers below come from `results/synthetic_results.md`, which
 `python run_synthetic.py` regenerates. The nuScenes pipeline (`run_nuscenes.py`) is complete
 and checked against the official evaluator (§5). **Real nuScenes and PAI–Foundation4D
-numbers are still missing**, because they need the dataset and a frozen detection file (§7).
+numbers are still missing**, because they need the dataset and a frozen detection file (§7, §8).
 
 ## 1. Problem and success criterion
 
@@ -75,7 +75,7 @@ it avoids wrong merges.
   (`0.5·s + 0.5·mean`), and short or low-confidence tracks are dropped.
 
 Future frames are used only through smoothing and stitching, which the offline setting
-allows. No appearance features are used; that variant is deliberately left separate (§7).
+allows. No appearance features are used; that variant is deliberately left separate (§8).
 
 ## 4. Protocol
 
@@ -229,7 +229,41 @@ Ours runs at 45 ms per 40-frame scene on one CPU core (the tuned baseline takes 
 pure numpy/scipy. Global stitching is one Hungarian solve per class per scene and is
 negligible. Ours is not slower than the baseline because pruning leaves fewer boxes to smooth.
 
-## 7. Limitations and open items
+## 7. Plan for the real-data run: official camera-only detections (Mapillary / MonoDIS)
+
+No StreamPETR or GeoUP results file is public; StreamPETR releases only checkpoints. The first
+real run therefore uses the frozen camera-only detections nuScenes itself publishes for
+train/val/test (Mapillary's MonoDIS). The protocol is adapted in four ways:
+
+1. **No detector velocities.** All MonoDIS velocities are exactly 0 (checked on all 6,019 val
+   samples). Treating them as measurements would be wrong, so *both* trackers run
+   position-only: velocity measurements get no weight and new tracks start from a 10 m/s
+   velocity prior. The baseline therefore no longer exactly mirrors Foundation4D, which uses
+   detector velocities.
+
+   On 30 synthetic val scenes with velocities zeroed:
+
+   | | with det. velocities | zero vel. fed as measurements | position-only |
+   |---|---|---|---|
+   | Baseline AMOTA / FRAG / IDS | 0.503 / 325 / 538 | 0.258 / 797 / 1700 | 0.440 / 406 / 954 |
+   | Ours AMOTA / FRAG / IDS | 0.558 / 211 / 193 | 0.355 / 536 / 1045 | 0.551 / 243 / 212 |
+
+   Losing velocities hurts the baseline much more than ours. **This setting favours stitching**,
+   and the gap it measures is larger than with a velocity-capable detector.
+2. **Tuning on held-out val scenes.** MonoDIS was trained on nuScenes train, so its train
+   detections are optimistic and thresholds tuned there would be too permissive on val.
+   Both trackers are tuned on the first 25 val scenes (sorted by name) and reported on the
+   other 125. The report must say this split was used.
+3. **Framing.** MonoDIS is a weak, older detector, and absolute AMOTA will be low. The
+   difficulty sweep (§6.4) shows gains shrink as detections improve (AMOTA tied at the
+   easiest level). A MonoDIS win does **not** show the method helps on Foundation4D-class
+   detectors; that still needs a StreamPETR run. The relative change, recall, MT and ML
+   (now printed by `run_nuscenes.py`) matter more than the raw values here.
+4. **A public baseline tracker (pending).** To answer the "straw-man baseline" objection,
+   AB3DMOT or SimpleTrack will be run on the same detection file. The tuned baseline should
+   score at least as well as they do.
+
+## 8. Limitations and open items
 
 1. **The results are synthetic.** The simulator models the known camera failure modes but is
    not a real detector. The real numbers come from:
@@ -264,7 +298,7 @@ negligible. Ours is not slower than the baseline because pruning leaves fewer bo
 7. **The two-stage AMOTA cost** (§6.3) is real. Whether to keep two-stage association
    should be decided again on real nuScenes train, where the tuning grid can include it.
 
-## 8. Reproducing
+## 9. Reproducing
 
 See `README.md`. In short:
 

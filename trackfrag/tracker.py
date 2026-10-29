@@ -20,7 +20,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from .core import (CLASS_ACCEL, CLASS_GATE, Frame, Meas, NoiseModel, Tracklet,
-                   cv_model, kf_update, rts_smooth, wrap_angle)
+                   cv_model, init_cov, kf_update, rts_smooth, wrap_angle)
 
 BIG = 1e9
 
@@ -72,7 +72,7 @@ class _Live:
 
     def __init__(self, cls, m, t):
         self.trk = Tracklet(cls, [m])
-        self.x, self.P, self.t, self.last_t, self.hits = m.z.copy(), m.R.copy(), t, t, 1
+        self.x, self.P, self.t, self.last_t, self.hits = m.z.copy(), init_cov(m.R), t, t, 1
 
 
 def _cost_matrix(live, xy, R, cls, cfg):
