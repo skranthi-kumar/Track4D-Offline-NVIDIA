@@ -1,8 +1,11 @@
-# trackfrag: fewer fragmented tracks from frozen camera-only 3D detections
+# Track4D-Offline: fewer fragmented tracks from frozen camera-only 3D detections
 
-An offline 3D multi-object tracker that extends the Foundation4D offline tracker
+An offline 3D multi-object tracker that extends the offline tracker of NVIDIA's Foundation4D
 (arXiv:2610.30340, Sec. 5.3) to reduce track fragmentation without adding identity switches.
 The detector is never touched: every method consumes the same detection file.
+The Python package is `trackfrag`.
+
+> Independent hackathon project. Not affiliated with or endorsed by NVIDIA.
 
 ## Layout
 
